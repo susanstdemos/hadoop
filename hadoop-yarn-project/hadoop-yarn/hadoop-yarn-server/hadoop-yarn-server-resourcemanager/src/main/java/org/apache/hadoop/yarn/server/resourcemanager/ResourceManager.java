@@ -62,15 +62,17 @@ import org.apache.hadoop.yarn.event.EventDispatcher;
 import org.apache.hadoop.yarn.event.EventHandler;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.exceptions.YarnRuntimeException;
+import org.apache.hadoop.yarn.nodelabels.NodeAttributesManager;
 import org.apache.hadoop.yarn.server.resourcemanager.ahs.RMApplicationHistoryWriter;
 import org.apache.hadoop.yarn.server.resourcemanager.amlauncher.AMLauncherEventType;
 import org.apache.hadoop.yarn.server.resourcemanager.amlauncher.ApplicationMasterLauncher;
 import org.apache.hadoop.yarn.server.resourcemanager.federation.FederationStateStoreService;
+import org.apache.hadoop.yarn.server.resourcemanager.metrics.CombinedSystemMetricsPublisher;
 import org.apache.hadoop.yarn.server.resourcemanager.metrics.NoOpSystemMetricPublisher;
 import org.apache.hadoop.yarn.server.resourcemanager.metrics.SystemMetricsPublisher;
 import org.apache.hadoop.yarn.server.resourcemanager.metrics.TimelineServiceV1Publisher;
 import org.apache.hadoop.yarn.server.resourcemanager.metrics.TimelineServiceV2Publisher;
-import org.apache.hadoop.yarn.server.resourcemanager.metrics.CombinedSystemMetricsPublisher;
+import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.NodeAttributesManagerImpl;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMDelegatedNodeLabelsUpdater;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.recovery.NullRMStateStore;
@@ -245,6 +247,13 @@ public class ResourceManager extends CompositeService implements Recoverable {
     this.rmContext = new RMContextImpl();
     rmContext.setResourceManager(this);
 
+
+    // add resource profiles here because it's used by AbstractYarnScheduler
+    ResourceProfilesManager resourceProfilesManager =
+        createResourceProfileManager();
+    resourceProfilesManager.init(conf);
+    rmContext.setResourceProfilesManager(resourceProfilesManager);
+
     this.configurationProvider =
         ConfigurationProviderFactory.getConfigurationProvider(conf);
     this.configurationProvider.init(this.conf);
@@ -253,8 +262,9 @@ public class ResourceManager extends CompositeService implements Recoverable {
     // load core-site.xml
     loadConfigurationXml(YarnConfiguration.CORE_SITE_CONFIGURATION_FILE);
 
-    // Refresh user to group mappings during init.
-    refreshUserToGroupMappingsWithConf();
+    // Do refreshUserToGroupsMappings with loaded core-site.xml
+    Groups.getUserToGroupsMappingServiceWithLoadedConfiguration(this.conf)
+        .refresh();
 
     // Do refreshSuperUserGroupsConfiguration with loaded core-site.xml
     // Or use RM specific configurations to overwrite the common ones first
@@ -337,21 +347,6 @@ public class ResourceManager extends CompositeService implements Recoverable {
     rmContext.setSystemMetricsPublisher(systemMetricsPublisher);
 
     super.serviceInit(this.conf);
-  }
-
-  private void refreshUserToGroupMappingsWithConf()
-      throws YarnException, IOException {
-    Configuration newConf = new Configuration(false);
-    InputStream confFileInputStream =
-        configurationProvider
-        .getConfigurationInputStream(newConf, YarnConfiguration.CORE_SITE_CONFIGURATION_FILE);
-    if (confFileInputStream != null) {
-      newConf.addResource(confFileInputStream);
-    }
-
-    // Do refreshUserToGroupsMappings with loaded core-site.xml
-    Groups.getUserToGroupsMappingServiceWithLoadedConfiguration(newConf)
-        .refresh();
   }
 
   private void loadConfigurationXml(String configurationFile)
@@ -504,6 +499,11 @@ public class ResourceManager extends CompositeService implements Recoverable {
     return new RMNodeLabelsManager();
   }
 
+  protected NodeAttributesManager createNodeAttributesManager()
+      throws InstantiationException, IllegalAccessException {
+    return new NodeAttributesManagerImpl();
+  }
+
   protected AllocationTagsManager createAllocationTagsManager() {
     return new AllocationTagsManager(this.rmContext);
   }
@@ -638,6 +638,10 @@ public class ResourceManager extends CompositeService implements Recoverable {
       nlm.setRMContext(rmContext);
       addService(nlm);
       rmContext.setNodeLabelManager(nlm);
+
+      NodeAttributesManager nam = createNodeAttributesManager();
+      addService(nam);
+      rmContext.setNodeAttributesManager(nam);
 
       AllocationTagsManager allocationTagsManager =
           createAllocationTagsManager();
